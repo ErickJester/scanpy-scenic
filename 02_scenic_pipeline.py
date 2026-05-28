@@ -377,11 +377,13 @@ try:
 
     db = RankingDatabase(fname=str(RANKING_PATH), name="hg38_rankings")
 
+    # num_workers=1 evita el spawn de procesos worker (mismo problema de
+    # multiprocessing que GRNBoost2 en WSL); suficiente para el dataset tiny.
     df_regulons = prune2df(
         rnkdbs=[db],
         modules=modules,
         motif_annotations_fname=str(MOTIFS_PATH),
-        num_workers=4,
+        num_workers=1,
     )
 
     regulons = df2regulons(df_regulons)
@@ -421,7 +423,7 @@ try:
     auc_matrix = aucell(
         expression_matrix=ex_matrix,
         signatures=regulons,
-        num_workers=4,
+        num_workers=1,
     )
 
     rlog(f"- Matriz AUCell: {auc_matrix.shape[0]:,} células × {auc_matrix.shape[1]:,} regulones")
