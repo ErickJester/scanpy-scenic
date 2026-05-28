@@ -333,7 +333,7 @@ try:
     rlog(f"- Rango de expresión: min={ex_matrix.values.min():.2f}, max={ex_matrix.values.max():.2f}")
     rlog(f"- % de ceros: {(ex_matrix.values == 0).mean() * 100:.1f}%")
 
-    tf_names = pd.read_csv(str(TF_PATH), header=None).squeeze().tolist()
+    tf_names = pd.read_csv(str(TF_PATH), header=None).iloc[:, 0].tolist()
     rlog(f"- Factores de transcripción cargados: {len(tf_names):,}")
 
     step_end("PASO 1 — Carga de la matriz de expresión")
