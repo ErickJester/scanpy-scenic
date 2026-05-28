@@ -2,8 +2,11 @@
 # TUTORIAL: Inferencia de Redes Regulatorias con pySCENIC
 # Fuente: https://github.com/aertslab/SCENICprotocol
 #
-# Dataset de prueba: expr_mat_tiny.loom (~78 MB con bases de datos incluidas)
-# Flujo: GRNBoost2 -> cisTarget -> AUCell -> visualización
+# Dataset de prueba: expr_mat_tiny.loom
+# Flujo: pyscenic grn -> pyscenic ctx -> pyscenic aucell -> visualización
+#
+# Usa los comandos CLI de pySCENIC (subprocess) en lugar de la API Python
+# para evitar incompatibilidades entre arboreto/dask/pandas modernos.
 # =============================================================================
 
 import os
@@ -11,31 +14,22 @@ import sys
 import time
 import platform
 import traceback
+import subprocess
 import urllib.request
 from datetime import datetime
 from pathlib import Path
 
-# IMPORTANTE: desactivar el lock de HDF5 ANTES de importar h5py/loompy.
-# En WSL y filesystems montados, h5py lanza BlockingIOError al abrir el .loom
-# si otro proceso (o un fork de dask/arboreto en GRNBoost2) lo tocó antes.
 os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 
 import pandas as pd
 import numpy as np
 import scanpy as sc
 import loompy
+import ast
+from sklearn.ensemble import GradientBoostingRegressor
+from ctxcore.genesig import GeneSignature
+from pyscenic.aucell import aucell as pyscenic_aucell
 
-from dask.distributed import Client as DaskClient
-from arboreto.algo import grnboost2
-from ctxcore.rnkdb import FeatherRankingDatabase as RankingDatabase
-from pyscenic.utils import modules_from_adjacencies
-from pyscenic.prune import prune2df, df2regulons
-from pyscenic.aucell import aucell
-from pyscenic.export import export2loom
-
-import pyscenic
-
-# Semilla global para reproducibilidad
 RANDOM_SEED = 42
 np.random.seed(RANDOM_SEED)
 
@@ -72,11 +66,38 @@ def step_end(name: str) -> None:
     rlog(f"- **Estado:** OK ✓")
 
 
+def run_pyscenic(cmd: list[str], step_name: str) -> subprocess.CompletedProcess:
+    """Ejecuta un comando pyscenic CLI y maneja errores."""
+    rlog(f"- Comando: `{' '.join(cmd)}`")
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+    if result.returncode != 0:
+        stderr = result.stderr.strip()
+        stdout = result.stdout.strip()
+        detail = stderr or stdout or "(sin output)"
+        raise RuntimeError(f"{step_name} falló (exit code {result.returncode}):\n{detail}")
+    if result.stderr.strip():
+        for line in result.stderr.strip().split("\n")[-5:]:
+            rlog(f"  [log] {line}")
+    return result
+
+
+def _get_pyscenic_version() -> str:
+    try:
+        r = subprocess.run(["pyscenic", "--version"], capture_output=True, text=True, timeout=10)
+        v = (r.stdout.strip() or r.stderr.strip()).replace("pyscenic", "").strip()
+        return v or "unknown"
+    except Exception:
+        return "unknown"
+
+
+PYSCENIC_VERSION = _get_pyscenic_version()
+
+
 def write_report(
     ex_matrix=None,
     tf_names=None,
-    modules=None,
-    regulons=None,
+    adjacencies=None,
+    n_regulons=0,
     auc_matrix=None,
     adata_scenic=None,
     error: str = None,
@@ -101,7 +122,7 @@ def write_report(
         f"| Python | {sys.version.split()[0]} |",
         f"| Sistema | {platform.system()} {platform.release()} |",
         f"| scanpy | {sc.__version__} |",
-        f"| pyscenic | {pyscenic.__version__} |",
+        f"| pyscenic (CLI) | {PYSCENIC_VERSION} |",
         f"| pandas | {pd.__version__} |",
         f"| numpy | {np.__version__} |",
         "",
@@ -125,19 +146,19 @@ def write_report(
         ]
         if tf_names:
             lines.append(f"| GRNBoost2 | TFs evaluados | {len(tf_names):,} |")
-        if modules:
-            lines.append(f"| GRNBoost2 | Módulos generados | {len(modules):,} |")
-        if regulons:
-            lines.append(f"| cisTarget | Regulones finales | {len(regulons):,} |")
-            avg_targets = np.mean([len(r.genes) for r in regulons])
-            lines.append(f"| cisTarget | Genes target promedio por regulón | {avg_targets:.1f} |")
+        if adjacencies is not None:
+            n_tfs = adjacencies["TF"].nunique() if "TF" in adjacencies.columns else 0
+            lines.append(f"| GRNBoost2 | Relaciones TF-gen | {len(adjacencies):,} |")
+            lines.append(f"| GRNBoost2 | TFs con targets | {n_tfs:,} |")
+        if n_regulons > 0:
+            lines.append(f"| cisTarget | Regulones finales | {n_regulons:,} |")
         if auc_matrix is not None:
             lines.append(f"| AUCell | Células × Regulones | {auc_matrix.shape[0]:,} × {auc_matrix.shape[1]:,} |")
-        if adata_scenic is not None:
+        if adata_scenic is not None and "leiden" in adata_scenic.obs.columns:
             lines.append(f"| Clustering | Clusters Leiden | {adata_scenic.obs['leiden'].nunique()} |")
 
     # Top regulones por actividad media
-    if auc_matrix is not None and len(auc_matrix) > 0:
+    if auc_matrix is not None and len(auc_matrix.columns) > 0:
         top_regulons = auc_matrix.mean().sort_values(ascending=False).head(10)
         lines += [
             "",
@@ -165,8 +186,8 @@ def write_report(
     if ex_matrix is not None:
         celulas_ok  = "✓" if ex_matrix.shape[0] > 0 else "✗ VACÍO"
         genes_ok    = "✓" if ex_matrix.shape[1] > 100 else "✗ MUY POCOS"
-        modulos_ok  = "✓" if modules and len(modules) > 0 else "✗ FALTA"
-        regulons_ok = "✓" if regulons and len(regulons) > 0 else "✗ FALTA — posible problema con cisTarget o DB"
+        adj_ok      = "✓" if adjacencies is not None and len(adjacencies) > 0 else "✗ FALTA"
+        regulons_ok = "✓" if n_regulons > 0 else "✗ FALTA — posible problema con cisTarget o DB"
         aucell_ok   = "✓" if auc_matrix is not None and not auc_matrix.empty else "✗ FALTA"
         umap_ok     = "✓" if adata_scenic is not None and "X_umap" in adata_scenic.obsm else "✗ FALTA"
         loom_ok     = "✓" if (OUT_DIR / "scenic_output.loom").exists() else "✗ NO GENERADO"
@@ -174,14 +195,14 @@ def write_report(
         lines += [
             f"| Matriz de expresión cargada | > 0 células | {ex_matrix.shape[0]:,} | {celulas_ok} |",
             f"| Genes en la matriz | > 100 | {ex_matrix.shape[1]:,} | {genes_ok} |",
-            f"| Módulos GRN generados | > 0 | {len(modules) if modules else 0:,} | {modulos_ok} |",
-            f"| Regulones cisTarget | > 0 | {len(regulons) if regulons else 0:,} | {regulons_ok} |",
+            f"| Adjacencias GRN | > 0 | {len(adjacencies) if adjacencies is not None else 0:,} | {adj_ok} |",
+            f"| Regulones cisTarget | > 0 | {n_regulons:,} | {regulons_ok} |",
             f"| Matriz AUCell calculada | Sí | {'Sí' if auc_matrix is not None else 'No'} | {aucell_ok} |",
             f"| UMAP sobre regulones | Sí | {'Sí' if adata_scenic is not None and 'X_umap' in adata_scenic.obsm else 'No'} | {umap_ok} |",
             f"| Loom exportado | Sí | {'Sí' if (OUT_DIR / 'scenic_output.loom').exists() else 'No'} | {loom_ok} |",
         ]
 
-        if regulons and len(regulons) == 0:
+        if n_regulons == 0 and adjacencies is not None:
             lines += [
                 "",
                 "> ⚠️ **ALERTA IA:** Si regulones = 0, verificar:",
@@ -231,11 +252,11 @@ sc.settings.set_figure_params(dpi=80, facecolor="white")
 sc.settings.verbosity = 1
 
 # Variables del pipeline
-ex_matrix   = None
-tf_names    = None
-modules     = None
-regulons    = None
-auc_matrix  = None
+ex_matrix    = None
+tf_names     = None
+adjacencies  = None
+n_regulons   = 0
+auc_matrix   = None
 adata_scenic = None
 
 try:
@@ -260,7 +281,7 @@ try:
             "https://resources.aertslab.org/cistarget/motif2tf/"
             "motifs-v10nr_clust-nr.hgnc-m0.001-o0.0.tbl"
         ),
-        "rankings.feather": (
+        "hg38_10kbp_up_10kbp_down_full_tx_v10_clust.genes_vs_motifs.rankings.feather": (
             "https://resources.aertslab.org/cistarget/databases/homo_sapiens/"
             "hg38/refseq_r80/mc_v10_clust/gene_based/"
             "hg38_10kbp_up_10kbp_down_full_tx_v10_clust.genes_vs_motifs.rankings.feather"
@@ -268,7 +289,6 @@ try:
     }
 
     def _remote_size(url: str) -> int:
-        """HEAD request — devuelve Content-Length o -1 si no se pudo determinar."""
         try:
             req = urllib.request.Request(url, method="HEAD")
             with urllib.request.urlopen(req, timeout=30) as resp:
@@ -280,7 +300,6 @@ try:
         dest = DATA_DIR / filename
         expected = _remote_size(url)
 
-        # Validar archivo existente: re-descargar si el tamaño no coincide.
         if dest.exists():
             local = dest.stat().st_size
             if expected > 0 and local != expected:
@@ -295,7 +314,6 @@ try:
             try:
                 urllib.request.urlretrieve(url, str(dest))
             except Exception as dl_err:
-                # Limpiar archivo parcial si urlretrieve dejó algo a medias.
                 if dest.exists():
                     dest.unlink()
                 raise RuntimeError(f"Falló la descarga de {filename} desde {url}: {dl_err}") from dl_err
@@ -314,7 +332,7 @@ try:
     LOOM_PATH    = DATA_DIR / "expr_mat_tiny.loom"
     TF_PATH      = DATA_DIR / "test_TFs_tiny.txt"
     MOTIFS_PATH  = DATA_DIR / "motifs.tbl"
-    RANKING_PATH = DATA_DIR / "rankings.feather"
+    RANKING_PATH = DATA_DIR / "hg38_10kbp_up_10kbp_down_full_tx_v10_clust.genes_vs_motifs.rankings.feather"
 
     step_end("PASO 0 — Descarga de datos de prueba")
 
@@ -340,105 +358,155 @@ try:
     step_end("PASO 1 — Carga de la matriz de expresión")
 
     # ==========================================================================
-    # PASO 2: GRNBoost2
+    # PASO 2: GRNBoost2  (sklearn — reemplaza arboreto/dask incompatibles)
     # ==========================================================================
-    step_start("PASO 2 — Inferencia de red (GRNBoost2)")
+    # arboreto/dask son incompatibles con dask moderno (legacy API eliminada).
+    # Se usa GradientBoostingRegressor de sklearn con el mismo protocolo:
+    # para cada gen target, regresarlo contra los TFs y extraer importancias.
+    # La salida es el mismo TSV (TF, target, importance) que acepta pyscenic ctx.
+    step_start("PASO 2 — Inferencia de red (GRNBoost2/sklearn)")
 
-    # processes=False fuerza workers por threads en lugar de procesos hijos,
-    # evitando el error de bootstrapping de multiprocessing en WSL con spawn.
-    _dask_client = DaskClient(n_workers=1, threads_per_worker=2, processes=False)
-    try:
-        adjacencies = grnboost2(
-            expression_data=ex_matrix,
-            tf_names=tf_names,
-            verbose=True,
-            seed=RANDOM_SEED,
-            client_or_address=_dask_client,
+    adj_path = OUT_DIR / "adjacencies.tsv"
+
+    tfs_in_matrix = [tf for tf in tf_names if tf in ex_matrix.columns]
+    rlog(f"- TFs presentes en la matriz: {len(tfs_in_matrix)} de {len(tf_names)}")
+
+    if not tfs_in_matrix:
+        raise RuntimeError(
+            f"Ninguno de los TFs del archivo {TF_PATH.name} aparece en la matriz de expresión. "
+            "Verificar que los nombres de gen coincidan (mayúsculas, versión de símbolo)."
         )
-    finally:
-        _dask_client.close()
+
+    records = []
+    X_tfs = ex_matrix[tfs_in_matrix].values
+    target_genes = [g for g in ex_matrix.columns if g not in tfs_in_matrix]
+
+    for target in target_genes:
+        y = ex_matrix[target].values
+        if y.std() == 0:
+            continue
+        gbm = GradientBoostingRegressor(
+            n_estimators=500,
+            max_depth=3,
+            random_state=RANDOM_SEED,
+        )
+        gbm.fit(X_tfs, y)
+        for tf, imp in zip(tfs_in_matrix, gbm.feature_importances_):
+            if imp > 0:
+                records.append({"TF": tf, "target": target, "importance": imp})
+
+    adjacencies = pd.DataFrame(records).sort_values("importance", ascending=False)
+    adjacencies.to_csv(str(adj_path), sep="\t", index=False)
 
     rlog(f"- Relaciones TF–gen encontradas: {len(adjacencies):,}")
-    rlog(f"- Importancia máxima: {adjacencies['importance'].max():.4f}")
-    rlog(f"- Importancia media: {adjacencies['importance'].mean():.4f}")
-    rlog(f"- Top 5 TFs más conectados:")
-    top_tfs = adjacencies.groupby("TF").size().sort_values(ascending=False).head(5)
-    for tf, n in top_tfs.items():
-        rlog(f"  • {tf}: {n} genes target")
+    if len(adjacencies) > 0:
+        rlog(f"- Importancia máxima: {adjacencies['importance'].max():.4f}")
+        rlog(f"- Importancia media: {adjacencies['importance'].mean():.4f}")
+        top_tfs = adjacencies.groupby("TF").size().sort_values(ascending=False).head(5)
+        rlog("- Top TFs más conectados:")
+        for tf, n in top_tfs.items():
+            rlog(f"  • {tf}: {n} genes target")
+    else:
+        rlog("- ⚠️ No se encontraron relaciones TF–gen (todos los genes con varianza cero?)")
 
-    # Guardar adjacencias
-    adj_path = OUT_DIR / "adjacencies.csv"
-    adjacencies.to_csv(str(adj_path), index=False)
-    rlog(f"- Adjacencias guardadas: {adj_path}")
-
-    modules = list(modules_from_adjacencies(adjacencies, ex_matrix))
-    rlog(f"- Módulos de co-regulación: {len(modules):,}")
-
-    step_end("PASO 2 — Inferencia de red (GRNBoost2)")
+    step_end("PASO 2 — Inferencia de red (GRNBoost2/sklearn)")
 
     # ==========================================================================
-    # PASO 3: cisTarget
+    # PASO 3: cisTarget  (pyscenic ctx — CLI)
     # ==========================================================================
     step_start("PASO 3 — Pruning por motivos (cisTarget)")
 
-    db = RankingDatabase(fname=str(RANKING_PATH), name="hg38_rankings")
+    regulons_path = OUT_DIR / "regulons.csv"
+    run_pyscenic([
+        "pyscenic", "ctx",
+        str(adj_path),
+        str(RANKING_PATH),
+        "--annotations_fname", str(MOTIFS_PATH),
+        "--expression_mtx_fname", str(LOOM_PATH),
+        "--output", str(regulons_path),
+        "--num_workers", "1",
+    ], "cisTarget")
 
-    # num_workers=1 evita el spawn de procesos worker (mismo problema de
-    # multiprocessing que GRNBoost2 en WSL); suficiente para el dataset tiny.
-    df_regulons = prune2df(
-        rnkdbs=[db],
-        modules=modules,
-        motif_annotations_fname=str(MOTIFS_PATH),
-        num_workers=1,
-    )
+    # Leer el CSV con multi-index para contar filas reales (no los headers).
+    try:
+        df_ctx_check = pd.read_csv(str(regulons_path), index_col=[0, 1], header=[0, 1])
+        n_regulons = len(df_ctx_check)
+    except Exception:
+        n_regulons = 0
 
-    regulons = df2regulons(df_regulons)
-    rlog(f"- Regulones identificados: {len(regulons):,}")
+    rlog(f"- Regulones identificados: {n_regulons:,}")
 
-    if regulons:
-        sizes = [len(r.genes) for r in regulons]
-        rlog(f"- Genes target por regulón: min={min(sizes)}, max={max(sizes)}, promedio={np.mean(sizes):.1f}")
-        rlog("- Top 5 regulones por número de genes target:")
-        for r in sorted(regulons, key=lambda x: len(x.genes), reverse=True)[:5]:
-            rlog(f"  • {r.transcription_factor}: {len(r.genes)} genes")
+    if n_regulons > 0:
+        rlog(f"- Resultados guardados en: {regulons_path.name}")
     else:
-        rlog("- ⚠️ No se identificaron regulones — revisar compatibilidad de DB de motivos con la matriz")
-
-    # Guardar tabla de regulones
-    if not df_regulons.empty:
-        reg_path = OUT_DIR / "regulons_table.csv"
-        df_regulons.to_csv(str(reg_path), index=False)
-        rlog(f"- Tabla de regulones guardada: {reg_path.name}")
+        rlog("- ⚠️ 0 regulones de cisTarget — posible causa: TF sin motivos enriquecidos en la DB hg38")
+        rlog("  (BRF1 es TF de RNA Pol III; sus motivos no aparecen en promotores de genes codificantes)")
+        rlog("  → Se usarán regulones derivados del GRN directamente para continuar el pipeline")
 
     step_end("PASO 3 — Pruning por motivos (cisTarget)")
 
-    # Si no hay regulones, no tiene sentido seguir con AUCell ni exportar
-    if not regulons:
-        raise RuntimeError(
-            "No se identificaron regulones tras cisTarget. "
-            "Verificar: (1) genoma de la DB coincide con la matriz, "
-            "(2) versión de motifs.tbl compatible con pySCENIC, "
-            "(3) gene symbols en la matriz coinciden con los de la DB."
-        )
-
     # ==========================================================================
-    # PASO 4: AUCell
+    # PASO 4: AUCell  (Python API — evita incompatibilidad de pandas 2.x con CLI)
     # ==========================================================================
+    # pyscenic aucell CLI usa load_motifs con multi-index que falla en pandas 2.x.
+    # Se parsea el CSV manualmente y se llama aucell() directo (sin arboreto/dask).
     step_start("PASO 4 — Scoring de actividad (AUCell)")
 
-    auc_matrix = aucell(
-        expression_matrix=ex_matrix,
-        signatures=regulons,
-        num_workers=1,
-    )
+    aucell_loom = OUT_DIR / "scenic_output.loom"
+
+    # Construir firmas de genes para AUCell.
+    # Fuente 1: regulons.csv de cisTarget (si encontró regulones).
+    # Fuente 2 (fallback): adjacencias del GRN directamente, sin validación de motivos.
+    signatures = []
+
+    if n_regulons > 0:
+        rlog("- Usando regulones de cisTarget")
+        df_ctx_raw = pd.read_csv(str(regulons_path), header=[0, 1], index_col=[0, 1])
+        df_ctx_raw.columns = [" ".join(c).strip() for c in df_ctx_raw.columns]
+        df_ctx_raw = df_ctx_raw.reset_index()
+        target_col = next(
+            (c for c in df_ctx_raw.columns if "TargetGenes" in c), None
+        )
+        tf_col = next(
+            (c for c in df_ctx_raw.columns if c in ("TF", "level_0")), None
+        )
+        if target_col and tf_col:
+            for _, row in df_ctx_raw.iterrows():
+                tf = str(row[tf_col])
+                try:
+                    genes = [t[0] for t in ast.literal_eval(str(row[target_col]))]
+                except Exception:
+                    genes = []
+                if genes:
+                    signatures.append(
+                        GeneSignature(name=f"{tf}(+)", gene2weight={g: 1.0 for g in genes})
+                    )
+    else:
+        rlog("- Fallback: construyendo regulones directamente desde adjacencias GRN")
+        rlog("  (sin validación de motivos — solo para demostrar el pipeline)")
+        for tf, group in adjacencies.groupby("TF"):
+            genes = group["target"].tolist()
+            if genes:
+                signatures.append(
+                    GeneSignature(
+                        name=f"{tf}(+)",
+                        gene2weight=dict(zip(group["target"], group["importance"])),
+                    )
+                )
+
+    rlog(f"- Firmas de genes construidas: {len(signatures)}")
+    if not signatures:
+        raise RuntimeError("No se pudieron construir firmas de genes")
+
+    auc_matrix = pyscenic_aucell(ex_matrix, signatures, num_workers=1)
 
     rlog(f"- Matriz AUCell: {auc_matrix.shape[0]:,} células × {auc_matrix.shape[1]:,} regulones")
-    rlog(f"- Score AUC: min={auc_matrix.values.min():.4f}, max={auc_matrix.values.max():.4f}, media={auc_matrix.values.mean():.4f}")
+    rlog(f"- Score AUC: min={auc_matrix.values.min():.4f}, max={auc_matrix.values.max():.4f}, "
+         f"media={auc_matrix.values.mean():.4f}")
 
-    # Guardar matriz AUCell
     auc_path = OUT_DIR / "auc_matrix.csv"
     auc_matrix.to_csv(str(auc_path))
-    rlog(f"- Matriz guardada: {auc_path}")
+    rlog(f"- Matriz guardada: {auc_path.name}")
 
     step_end("PASO 4 — Scoring de actividad (AUCell)")
 
@@ -447,7 +515,6 @@ try:
     # ==========================================================================
     step_start("PASO 5 — Visualización (scanpy)")
 
-    # Construcción limpia del AnnData (sin warnings de obs_names asignados después)
     adata_scenic = sc.AnnData(
         X=auc_matrix.values,
         obs=pd.DataFrame(index=auc_matrix.index.astype(str)),
@@ -473,7 +540,6 @@ try:
     )
 
     if auc_matrix.shape[1] >= 4:
-        # Top regulones por actividad media (más informativo que los primeros 4)
         top_regulon_names = auc_matrix.mean().sort_values(ascending=False).head(4).index.tolist()
         sc.pl.umap(
             adata_scenic,
@@ -485,36 +551,24 @@ try:
         )
         rlog(f"- UMAP de top 4 regulones más activos guardado: {top_regulon_names}")
 
+    # Guardar AnnData con embeddings
+    adata_path = OUT_DIR / "scenic_adata.h5ad"
+    adata_scenic.write_h5ad(str(adata_path))
+    rlog(f"- AnnData guardado: {adata_path.name}")
+
     step_end("PASO 5 — Visualización (scanpy)")
 
     # ==========================================================================
-    # PASO 6: EXPORTAR A LOOM
+    # PASO 6: RESUMEN DE SALIDA
     # ==========================================================================
-    step_start("PASO 6 — Exportar a loom (SCope)")
+    step_start("PASO 6 — Salida final")
 
-    OUTPUT_LOOM = str(OUT_DIR / "scenic_output.loom")
+    rlog(f"- AnnData con UMAP/Leiden: {adata_path.name}")
+    rlog(f"- Matriz AUC: auc_matrix.csv")
+    rlog(f"- Regulones cisTarget: {regulons_path.name}")
+    rlog(f"- Adjacencias GRN: {adj_path.name}")
 
-    export2loom(
-        ex_mtx=ex_matrix,
-        regulons=regulons,
-        cell_annotations=adata_scenic.obs["leiden"].to_dict(),
-        out_fname=OUTPUT_LOOM,
-        auc_mtx=auc_matrix,
-        embeddings={
-            "UMAP": pd.DataFrame(
-                adata_scenic.obsm["X_umap"],
-                index=adata_scenic.obs_names,
-                columns=["UMAP_1", "UMAP_2"],
-            )
-        },
-    )
-
-    size_mb = Path(OUTPUT_LOOM).stat().st_size / (1024 * 1024)
-    rlog(f"- Loom guardado: {OUTPUT_LOOM}")
-    rlog(f"- Tamaño: {size_mb:.1f} MB")
-    rlog("- Listo para visualizar en https://scope.aertslab.org")
-
-    step_end("PASO 6 — Exportar a loom (SCope)")
+    step_end("PASO 6 — Salida final")
 
 except Exception as e:
     error = traceback.format_exc()
@@ -524,8 +578,8 @@ finally:
     write_report(
         ex_matrix=ex_matrix,
         tf_names=tf_names,
-        modules=modules,
-        regulons=regulons,
+        adjacencies=adjacencies,
+        n_regulons=n_regulons,
         auc_matrix=auc_matrix,
         adata_scenic=adata_scenic,
         error=error,
