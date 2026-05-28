@@ -25,6 +25,7 @@ import numpy as np
 import scanpy as sc
 import loompy
 
+from dask.distributed import Client as DaskClient
 from arboreto.algo import grnboost2
 from ctxcore.rnkdb import FeatherRankingDatabase as RankingDatabase
 from pyscenic.utils import modules_from_adjacencies
@@ -343,14 +344,19 @@ try:
     # ==========================================================================
     step_start("PASO 2 — Inferencia de red (GRNBoost2)")
 
-    # Usar client=False para ejecutar sin dask workers (evita multiprocessing issues en WSL)
-    adjacencies = grnboost2(
-        expression_data=ex_matrix,
-        tf_names=tf_names,
-        verbose=True,
-        seed=RANDOM_SEED,
-        client_or_address=False,  # Ejecutar localmente sin scheduler
-    )
+    # processes=False fuerza workers por threads en lugar de procesos hijos,
+    # evitando el error de bootstrapping de multiprocessing en WSL con spawn.
+    _dask_client = DaskClient(n_workers=1, threads_per_worker=2, processes=False)
+    try:
+        adjacencies = grnboost2(
+            expression_data=ex_matrix,
+            tf_names=tf_names,
+            verbose=True,
+            seed=RANDOM_SEED,
+            client_or_address=_dask_client,
+        )
+    finally:
+        _dask_client.close()
 
     rlog(f"- Relaciones TF–gen encontradas: {len(adjacencies):,}")
     rlog(f"- Importancia máxima: {adjacencies['importance'].max():.4f}")
