@@ -6,6 +6,7 @@
 # Flujo: GRNBoost2 -> cisTarget -> AUCell -> visualización
 # =============================================================================
 
+import os
 import sys
 import time
 import platform
@@ -13,6 +14,11 @@ import traceback
 import urllib.request
 from datetime import datetime
 from pathlib import Path
+
+# IMPORTANTE: desactivar el lock de HDF5 ANTES de importar h5py/loompy.
+# En WSL y filesystems montados, h5py lanza BlockingIOError al abrir el .loom
+# si otro proceso (o un fork de dask/arboreto en GRNBoost2) lo tocó antes.
+os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 
 import pandas as pd
 import numpy as np
@@ -260,16 +266,49 @@ try:
         ),
     }
 
+    def _remote_size(url: str) -> int:
+        """HEAD request — devuelve Content-Length o -1 si no se pudo determinar."""
+        try:
+            req = urllib.request.Request(url, method="HEAD")
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                return int(resp.headers.get("Content-Length", -1))
+        except Exception:
+            return -1
+
     for filename, url in URLS.items():
         dest = DATA_DIR / filename
+        expected = _remote_size(url)
+
+        # Validar archivo existente: re-descargar si el tamaño no coincide.
+        if dest.exists():
+            local = dest.stat().st_size
+            if expected > 0 and local != expected:
+                rlog(f"- {filename} corrupto/incompleto ({local} B vs {expected} B esperados), re-descargando...")
+                dest.unlink()
+            elif local == 0:
+                rlog(f"- {filename} está vacío, re-descargando...")
+                dest.unlink()
+
         if not dest.exists():
             rlog(f"- Descargando {filename}...")
-            urllib.request.urlretrieve(url, str(dest))
-            size_mb = dest.stat().st_size / (1024 * 1024)
-            rlog(f"  → Guardado ({size_mb:.1f} MB)")
+            try:
+                urllib.request.urlretrieve(url, str(dest))
+            except Exception as dl_err:
+                # Limpiar archivo parcial si urlretrieve dejó algo a medias.
+                if dest.exists():
+                    dest.unlink()
+                raise RuntimeError(f"Falló la descarga de {filename} desde {url}: {dl_err}") from dl_err
+            actual = dest.stat().st_size
+            if expected > 0 and actual != expected:
+                raise RuntimeError(
+                    f"Tamaño inesperado para {filename}: {actual} B (esperado {expected} B). "
+                    "Posible 404 servido como HTML o conexión interrumpida."
+                )
+            size_mb = actual / (1024 * 1024)
+            rlog(f"  → Guardado ({size_mb:.2f} MB)")
         else:
             size_mb = dest.stat().st_size / (1024 * 1024)
-            rlog(f"- Ya existe: {filename} ({size_mb:.1f} MB)")
+            rlog(f"- Ya existe: {filename} ({size_mb:.2f} MB)")
 
     LOOM_PATH    = DATA_DIR / "expr_mat_tiny.loom"
     TF_PATH      = DATA_DIR / "test_TFs_tiny.txt"
@@ -304,11 +343,13 @@ try:
     # ==========================================================================
     step_start("PASO 2 — Inferencia de red (GRNBoost2)")
 
+    # Usar client=False para ejecutar sin dask workers (evita multiprocessing issues en WSL)
     adjacencies = grnboost2(
         expression_data=ex_matrix,
         tf_names=tf_names,
         verbose=True,
         seed=RANDOM_SEED,
+        client_or_address=False,  # Ejecutar localmente sin scheduler
     )
 
     rlog(f"- Relaciones TF–gen encontradas: {len(adjacencies):,}")
