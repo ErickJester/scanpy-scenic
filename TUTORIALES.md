@@ -1,120 +1,112 @@
 # Relación entre los dos tutoriales
 
-Este proyecto une dos tutoriales oficiales que abordan **dos mitades complementarias**
-del análisis de single-cell RNA-seq.
+Este proyecto une dos tutoriales oficiales que cubren **dos mitades complementarias**
+del análisis de single-cell RNA-seq, ejecutados **tal cual el ecosistema de 2021**,
+sobre **el mismo dataset (PBMC3k)** y en **un único entorno conda**.
 
 | | Tutorial 1 | Tutorial 2 |
 |---|---|---|
-| **Fuente** | [scanpy — clustering](https://scanpy.readthedocs.io/en/stable/tutorials/basics/clustering.html) | [aertslab/SCENICprotocol](https://github.com/aertslab/SCENICprotocol) |
-| **Pregunta que responde** | *¿Qué tipos de células hay?* | *¿Qué redes regulatorias las controlan?* |
-| **Entrada** | Matriz cruda de conteos (10X `.h5`) | Matriz de expresión (`.loom`) |
-| **Método** | QC → normalización → PCA → vecinos → UMAP → Leiden | GRNBoost2 → cisTarget → AUCell |
-| **Salida** | Células agrupadas y anotadas (`.h5ad`) | Actividad de regulones por célula (matriz AUC) |
+| **Fuente** | [scanpy — clustering PBMC3k](https://scanpy.readthedocs.io/en/stable/tutorials/basics/clustering.html) | [aertslab/SCENICprotocol](https://github.com/aertslab/SCENICprotocol) |
+| **Pregunta** | *¿Qué tipos de células hay?* | *¿Qué redes regulatorias las controlan?* |
+| **Método** | QC → normalización → PCA → vecinos → UMAP → Leiden | `pyscenic grn` → `pyscenic ctx` → `pyscenic aucell` |
+| **Salida** | Células agrupadas y anotadas (`.h5ad`) + loom de counts | Actividad de regulones por célula (matriz AUC) |
 | **Script** | `01_scanpy_clustering.py` | `02_scenic_pipeline.py` |
 
 ---
 
 ## ¿Cómo se relacionan?
 
-Los dos tutoriales son **secuenciales y complementarios**, no alternativos:
+Son **secuenciales y complementarios**, no alternativos. scanpy te dice **qué**
+células tienes; SCENIC te dice **por qué** se comportan así (qué programas
+regulatorios las definen). El protocolo SCENIC está diseñado para correr **sobre
+las mismas células** que ya procesó scanpy, y terminar integrando todo en un loom.
 
 ```
-   Datos crudos (10X)
+   PBMC3k (2,700 células)
           │
           ▼
    ┌──────────────────┐
-   │  TUTORIAL 1       │   scanpy: agrupa células en tipos celulares
-   │  scanpy clustering│   (Monocytes, Lymphocytes, B Cells, ...)
+   │  TUTORIAL 1       │   scanpy: QC, clustering, tipos celulares
+   │  01_scanpy        │   (CD4 T, Monocytes, B, NK, ...)
    └──────────────────┘
           │  adata_clustered.h5ad
+          │  pbmc3k_for_scenic.loom  ◀── counts crudos, mismos barcodes
           ▼
    ┌──────────────────┐
-   │  TUTORIAL 2       │   SCENIC: infiere qué factores de transcripción
-   │  SCENIC pipeline  │   están activos en cada célula
+   │  TUTORIAL 2       │   SCENIC: GRNBoost2 → cisTarget → AUCell
+   │  02_scenic        │   regulones reales (símbolos HGNC vs DB hg38)
    └──────────────────┘
-          │  auc_matrix.csv
+          │  auc_matrix.csv  ◀── mismos barcodes que scanpy
           ▼
    ┌──────────────────┐
-   │  INTEGRACIÓN      │   03: combina ambos → "este tipo celular usa
-   │  (este proyecto)  │   estos regulones"
+   │  INTEGRACIÓN      │   03: cruza clusters de scanpy con regulones
+   │  03_integrate     │   "este tipo celular usa estos regulones"
    └──────────────────┘
           │  integrated_output.loom
           ▼
    Biología interpretable
 ```
 
-scanpy te dice **qué** células tienes. SCENIC te dice **por qué** se comportan así
-(qué programas regulatorios las definen). El valor está en cruzar ambos: descubrir
-que, por ejemplo, los monocitos están dominados por el regulón `SPI1(+)`.
+El **puente** es el dataset compartido: `01` exporta `pbmc3k_for_scenic.loom` con
+los counts crudos y los **mismos códigos de barras** que su `adata_clustered.h5ad`.
+`02` corre SCENIC sobre ese loom, así que la matriz AUC sale indexada por los
+mismos barcodes. Por eso `03` puede cruzarlos célula a célula (sin NaN).
 
 ---
 
-## El problema técnico clave: viven en eras de software distintas
+## El problema técnico que resuelve este proyecto
 
-Esta es la parte importante de la relación, y la razón por la que el proyecto
-usa **dos entornos conda separados**.
+El tutorial de scanpy del enlace es la versión *actual* (2024) y el protocolo
+SCENIC es de *2021*. Sus versiones de software son mutuamente incompatibles:
+SCENIC necesita `numpy <1.24` (antes de eliminar `np.object`) y `pandas <2.0`,
+mientras que el scanpy moderno arrastra `numpy 1.26` + `pandas 2.x`.
 
-- El tutorial de **scanpy** es la versión *stable actual* (2024+). Usa APIs modernas
-  (`sc.pp.scrublet`, `leiden flavor="igraph"`) que **exigen scanpy ≥1.10**, y por
-  arrastre `numpy 1.26` + `pandas 2.x`.
+**La solución adoptada aquí: retroceder todo al ecosistema 2021.** Se usa la
+versión 2021 del tutorial de scanpy (el workflow clásico de **PBMC3k**) para que
+ambos tutoriales convivan en **un solo entorno conda** (`environment.yml`):
 
-- El protocolo **SCENIC** se publicó en *2021*. Su motor de inferencia de redes
-  (`GRNBoost2` vía `arboreto` + `dask`) y `pyscenic` se escribieron contra
-  `numpy <1.24` (antes de eliminar `np.object`, `np.float`) y `pandas <2.0`
-  (antes del cambio en la API de `MultiIndex`).
+- `python 3.10`, `numpy 1.23.5`, `pandas 1.5.3`
+- `scanpy 1.9.3`, `anndata 0.8.0`
+- `pyscenic 0.12.1`, `arboreto 0.1.6`, `ctxcore 0.2.0`, `dask 2023.3.2`
 
-Estos dos rangos de versiones **son mutuamente incompatibles**: no existe un solo
-entorno donde ambos tutoriales corran "tal cual". Si fuerzas a SCENIC al entorno
-moderno, fallan `arboreto`/`pyscenic`; si fuerzas a scanpy al entorno viejo, falla
-el tutorial de clustering.
+Con este entorno, `pyscenic grn` corre **GRNBoost2 real** (arboreto + dask), tal
+como el protocolo — sin reemplazos ni parches.
 
-### La solución: traspaso por archivos
+---
 
-Los dos pipelines **no comparten una sesión de Python**: se comunican escribiendo y
-leyendo archivos en disco.
+## Por qué PBMC3k para ambos
 
-```
-[entorno scanpy-tutorial]  01 ──escribe──▶  adata_clustered.h5ad
-                                                   │
-[entorno scenic-tutorial]  02 ──escribe──▶  auc_matrix.csv
-                                                   │
-[cualquier entorno]        03 ──lee ambos──▶ integrated_output.loom
-```
+El tutorial de scanpy de 2021 usaba PBMC3k; el de SCENIC usaba PBMC10k. Son
+muestras distintas (barcodes que no coinciden), así que correr cada tutorial en
+su propio dataset haría que la integración no encontrara células en común.
 
-Como el handoff es por archivos (`.h5ad`, `.csv`, `.loom`), **cada pipeline puede
-correr en el entorno conda que necesita**, en momentos distintos e incluso en
-máquinas distintas. Esto es exactamente lo que recomienda el protocolo SCENIC
-oficial, que termina exportando un `.loom` integrado para SCope.
+Usando **PBMC3k para toda la cadena** se logra lo mejor de ambos: es el dataset
+fiel del tutorial de scanpy, corre rápido en SCENIC, y como es **un único
+dataset** la integración tiene biología real. Además, al ser PBMC humano con
+símbolos de gen HGNC, `cisTarget` sí encuentra regulones enriquecidos contra la
+base de datos hg38 (cosa imposible con datos sintéticos).
 
 ---
 
 ## Cómo reproducirlo en otra PC
 
 ```bash
-# --- Tutorial 1: scanpy ---
-conda env create -f environment-scanpy.yml
-conda activate scanpy-tutorial
-python 01_scanpy_clustering.py        # → runs/scanpy_*/adata_clustered.h5ad
+conda env create -f environment.yml
+conda activate scenic-2021
 
-# --- Tutorial 2: SCENIC ---
-conda env create -f environment-scenic.yml
-conda activate scenic-tutorial
-python 02_scenic_pipeline.py          # → runs/scenic_*/auc_matrix.csv
-
-# --- Integración (cualquiera de los dos entornos sirve) ---
-python 03_integrate_anndata.py        # → runs/integrate_*/integrated_output.loom
+python 01_scanpy_clustering.py    # PBMC3k → clusters + pbmc3k_for_scenic.loom
+python 02_scenic_pipeline.py      # GRNBoost2 real → cisTarget → AUCell
+python 03_integrate_anndata.py    # une ambos → integrated_output.loom
 ```
 
-Cada script deja una carpeta con timestamp en `runs/` que incluye un
-`reporte_tecnico.md` con métricas, criterios de validación y los archivos generados.
+Cada script deja una carpeta con timestamp en `runs/` con un `reporte_tecnico.md`
+(métricas, criterios de validación y archivos generados).
 
----
+### Notas de ejecución
 
-## Nota sobre la implementación actual de GRNBoost2
-
-En el entorno moderno, `02_scenic_pipeline.py` reemplaza GRNBoost2 por una
-implementación equivalente con `sklearn.GradientBoostingRegressor` (mismo protocolo:
-regresar cada gen contra los TFs y extraer importancias), porque `arboreto` no corre
-con dask moderno. **Con el entorno `scenic-tutorial` (versiones fijadas), se puede
-usar el GRNBoost2 real del tutorial**, ya que `arboreto` y `dask 2023.3.2` son
-compatibles.
+- **`pyscenic grn` es el paso lento.** GRNBoost2 sobre ~2,700 células × ~13,000
+  genes con ~1,800 TFs puede tardar de minutos a un par de horas según el número
+  de núcleos. Se controla con la variable de entorno `SCENIC_WORKERS`
+  (por defecto `min(4, núcleos)`).
+- La primera corrida de `02` descarga ~390 MB de recursos cisTarget (lista de TFs,
+  `motifs.tbl` y el ranking `feather` de hg38) a `scenic_data/`. Se cachean.

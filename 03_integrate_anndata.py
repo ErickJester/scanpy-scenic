@@ -303,8 +303,8 @@ try:
     step_start("PASO 5 — Visualización integrada")
 
     if n_matched > 0 and "X_umap" in adata.obsm:
-        # Top 4 regulones por actividad media
-        top_regs = auc_matrix[common_cells].mean().sort_values(ascending=False).head(4)
+        # Top 4 regulones por actividad media (sobre las células en común)
+        top_regs = auc_matrix.loc[common_cells].mean().sort_values(ascending=False).head(4)
         top_obs_names = [
             f"scenic_{r.replace('(', '_').replace(')', '').replace('+', 'plus')}"
             for r in top_regs.index

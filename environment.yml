@@ -1,0 +1,55 @@
+# =============================================================================
+# Entorno conda ÚNICO — época 2021, para correr AMBOS tutoriales tal cual
+#
+#   Tutorial 1: scanpy clustering (PBMC3k)
+#   Tutorial 2: SCENIC protocol (GRNBoost2 -> cisTarget -> AUCell)
+#
+# Ambos pipelines corren sobre el MISMO dataset (PBMC3k) y en el MISMO entorno.
+# Las versiones están fijadas al ecosistema con el que el protocolo SCENIC de
+# 2021 funciona (numpy <1.24, pandas <2.0, dask compatible con arboreto). Es el
+# mismo conjunto que usa la imagen oficial aertslab/pyscenic:0.12.1.
+#
+# Crear y activar:
+#   conda env create -f environment.yml
+#   conda activate scenic-2021
+#
+# Ejecutar la cadena completa:
+#   python 01_scanpy_clustering.py    # PBMC3k -> clusters + loom para SCENIC
+#   python 02_scenic_pipeline.py      # GRNBoost2 real -> cisTarget -> AUCell
+#   python 03_integrate_anndata.py    # une ambos -> loom integrado
+# =============================================================================
+name: scenic-2021
+
+channels:
+  - conda-forge
+  - bioconda
+
+dependencies:
+  # --- Base numérica fijada al ecosistema 2021 ---
+  - python=3.10
+  - numpy=1.23.5
+  - pandas=1.5.3
+  - scipy=1.10.1
+  - numba
+
+  # --- Motor de GRNBoost2 (arboreto necesita esta gama de dask) ---
+  - dask=2023.3.2
+  - distributed=2023.3.2
+  - cytoolz
+
+  # --- scanpy y clustering (versión 2021) ---
+  - scanpy=1.9.3
+  - anndata=0.8.0
+  - leidenalg
+  - python-igraph
+  - matplotlib-base
+  - seaborn
+
+  # --- pySCENIC y dependencias (solo en pip) ---
+  - pip
+  - pip:
+      - pyscenic==0.12.1
+      - arboreto==0.1.6
+      - ctxcore==0.2.0
+      - loompy==3.0.7
+      - pooch
