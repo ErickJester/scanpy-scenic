@@ -1,0 +1,58 @@
+# =============================================================================
+# Entorno conda ÚNICO — "punto de compatibilidad" para correr AMBOS tutoriales
+#
+#   Tutorial 1: scanpy clustering — DATASET ACTUAL del enlace (médula ósea, ~17k)
+#   Tutorial 2: SCENIC protocol (GRNBoost2 -> cisTarget -> AUCell, REAL)
+#
+# El tutorial de scanpy del enlace usa APIs modernas (sc.pp.scrublet, leiden
+# flavor="igraph") que exigen scanpy >=1.10. El protocolo SCENIC necesita
+# numpy <1.24 (para que pyscenic 0.12.1 no rompa con np.object) y pandas <2.0.
+# La intersección de ambos es: scanpy 1.10 + numpy 1.23 + pandas 1.5. Ese es el
+# entorno más nuevo donde el tutorial actual de scanpy y GRNBoost2 real conviven.
+#
+# Crear y activar:
+#   conda env create -f environment.yml
+#   conda activate scenic-medula
+#
+# Ejecutar la cadena completa:
+#   python 01_scanpy_clustering.py    # médula ósea -> clusters + loom para SCENIC
+#   python 02_scenic_pipeline.py      # GRNBoost2 real -> cisTarget -> AUCell
+#   python 03_integrate_anndata.py    # une ambos -> loom integrado
+# =============================================================================
+name: scenic-medula
+
+channels:
+  - conda-forge
+  - bioconda
+
+dependencies:
+  # --- Base numérica: numpy <1.24 es el techo (pyscenic 0.12.1) ---
+  - python=3.10
+  - numpy=1.23.5
+  - pandas=1.5.3
+  - scipy=1.10.1
+  - numba
+
+  # --- Motor de GRNBoost2 (arboreto necesita esta gama de dask) ---
+  - dask=2023.3.2
+  - distributed=2023.3.2
+  - cytoolz
+
+  # --- scanpy 1.10: versión más nueva compatible con numpy 1.23 que conserva
+  #     las APIs del tutorial actual (scrublet, leiden flavor="igraph") ---
+  - scanpy=1.10.4
+  - anndata=0.10.8
+  - leidenalg
+  - python-igraph
+  - pooch
+  - matplotlib-base
+  - seaborn
+
+  # --- pySCENIC y dependencias (solo en pip) ---
+  - pip
+  - pip:
+      - scrublet
+      - pyscenic==0.12.1
+      - arboreto==0.1.6
+      - ctxcore==0.2.0
+      - loompy==3.0.7

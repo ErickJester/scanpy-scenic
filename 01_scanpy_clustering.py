@@ -21,6 +21,8 @@ import pooch
 import scanpy as sc
 import numpy as np
 import pandas as pd
+import scipy.sparse as sp
+import loompy
 
 # Semilla global para reproducibilidad
 RANDOM_SEED = 0
@@ -447,6 +449,34 @@ try:
     rlog("- Top 5 genes por cluster guardados en adata.uns['rank_genes_groups']")
 
     step_end("PASO 10 — Expresión diferencial (Wilcoxon)")
+
+    # ==========================================================================
+    # PASO 11: EXPORTAR LOOM DE COUNTS CRUDOS PARA SCENIC
+    # ==========================================================================
+    # SCENIC (02) corre sobre las MISMAS células que este clustering. Se exporta
+    # la matriz de counts crudos (layer 'counts') con todos los genes filtrados y
+    # los mismos códigos de barras, en símbolos HGNC, para que GRNBoost2/AUCell y
+    # cisTarget (DB hg38) trabajen sobre los datos correctos. El puente entre
+    # ambos tutoriales es este loom + los barcodes compartidos.
+    step_start("PASO 11 — Exportar loom para SCENIC")
+
+    counts = adata.layers["counts"]
+    if sp.issparse(counts):
+        counts = counts.toarray()
+    counts = np.asarray(counts, dtype=np.float32)
+
+    scenic_loom = OUT_DIR / "bonemarrow_for_scenic.loom"
+    loompy.create(
+        str(scenic_loom),
+        counts.T,                                   # loom: genes × células
+        {"Gene": np.array(adata.var_names)},
+        {"CellID": np.array(adata.obs_names)},
+    )
+    size_mb = scenic_loom.stat().st_size / (1024 * 1024)
+    rlog(f"- Loom exportado: {scenic_loom.name} ({size_mb:.1f} MB)")
+    rlog(f"- Contenido: {adata.n_obs:,} células × {adata.n_vars:,} genes (counts crudos)")
+
+    step_end("PASO 11 — Exportar loom para SCENIC")
 
     # ==========================================================================
     # GUARDAR AnnData

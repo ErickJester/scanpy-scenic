@@ -1,13 +1,27 @@
-scanpy>=1.10.0
-anndata>=0.10.0
-pooch
+# =============================================================================
+# Dependencias "punto de compatibilidad" para correr AMBOS tutoriales (pip).
+#
+# RECOMENDADO: usar conda con environment.yml en su lugar — numpy/pandas/dask
+# y arboreto traen extensiones binarias que conda resuelve de forma más fiable.
+# Replica el entorno `scenic-medula`. Requiere Python 3.10.
+#
+# scanpy 1.10 es la versión más nueva compatible con numpy 1.23 (el techo que
+# impone pyscenic 0.12.1) que conserva las APIs del tutorial actual de scanpy.
+# =============================================================================
+numpy==1.23.5
+pandas==1.5.3
+scipy==1.10.1
+dask==2023.3.2
+distributed==2023.3.2
+scanpy==1.10.4
+anndata==0.10.8
 leidenalg
 igraph
 scrublet
-pyscenic>=0.12.0
-arboreto
-loompy
-pandas
-numpy>=1.26,<2.0
+pyscenic==0.12.1
+arboreto==0.1.6
+ctxcore==0.2.0
+loompy==3.0.7
+pooch
 matplotlib
 seaborn
