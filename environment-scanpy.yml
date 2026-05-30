@@ -1,0 +1,33 @@
+# =============================================================================
+# Entorno conda para el TUTORIAL DE SCANPY (01_scanpy_clustering.py)
+# Fuente: https://scanpy.readthedocs.io/en/stable/tutorials/basics/clustering.html
+#
+# Este tutorial usa la versión ACTUAL/stable de scanpy (2024+), que requiere
+# APIs modernas: sc.pp.scrublet, leiden flavor="igraph", numpy 1.26, pandas 2.x.
+#
+# Crear el entorno:
+#   conda env create -f environment-scanpy.yml
+#   conda activate scanpy-tutorial
+#   python 01_scanpy_clustering.py
+# =============================================================================
+name: scanpy-tutorial
+
+channels:
+  - conda-forge
+  - bioconda
+
+dependencies:
+  - python=3.12
+  - pip
+  - numpy=1.26
+  - pandas=2.2
+  - scipy
+  - matplotlib
+  - seaborn
+  - igraph
+  - leidenalg
+  - pip:
+      - scanpy>=1.10,<1.12
+      - anndata>=0.10
+      - pooch
+      - scrublet

@@ -268,15 +268,45 @@ try:
     DATA_DIR = Path("scenic_data")
     DATA_DIR.mkdir(exist_ok=True)
 
-    URLS = {
-        "expr_mat_tiny.loom": (
-            "https://resources.aertslab.org/cistarget/tmp/pyscenic_tutorial/"
-            "expr_mat_tiny.loom"
-        ),
-        "test_TFs_tiny.txt": (
-            "https://resources.aertslab.org/cistarget/tmp/pyscenic_tutorial/"
-            "test_TFs_tiny.txt"
-        ),
+    LOOM_PATH    = DATA_DIR / "expr_mat_tiny.loom"
+    TF_PATH      = DATA_DIR / "test_TFs_tiny.txt"
+    MOTIFS_PATH  = DATA_DIR / "motifs.tbl"
+    RANKING_PATH = DATA_DIR / "hg38_10kbp_up_10kbp_down_full_tx_v10_clust.genes_vs_motifs.rankings.feather"
+
+    # --- Loom sintético (reemplaza URL 404 de aertslab) ---
+    SYNTHETIC_TFS = [
+        "STAT3", "MYC", "TP53", "FOXA1", "SP1", "E2F1", "GATA1",
+        "RUNX1", "FLI1", "ETS1", "BRF1", "SPI1", "CEBPA", "IRF4",
+        "NFKB1", "JUN", "FOS", "RELA", "ATF3", "KLF4",
+    ]
+    if not LOOM_PATH.exists():
+        rlog("- Generando expr_mat_tiny.loom sintético (URL original en 404)...")
+        other_genes = [f"GENE{i:04d}" for i in range(1, 481)]
+        all_genes = SYNTHETIC_TFS + other_genes
+        n_cells, n_genes = 300, len(all_genes)
+        rng = np.random.default_rng(RANDOM_SEED)
+        expr = rng.negative_binomial(2, 0.5, size=(n_genes, n_cells)).astype(np.float32)
+        cell_ids = np.array([f"Cell_{i:04d}" for i in range(n_cells)])
+        loompy.create(
+            str(LOOM_PATH),
+            expr,
+            {"Gene": np.array(all_genes)},
+            {"CellID": cell_ids},
+        )
+        rlog(f"  → {n_cells} células × {n_genes} genes generados")
+    else:
+        rlog(f"- Ya existe: {LOOM_PATH.name}")
+
+    # --- Lista de TFs sintética ---
+    if not TF_PATH.exists():
+        rlog("- Generando test_TFs_tiny.txt sintético...")
+        TF_PATH.write_text("\n".join(SYNTHETIC_TFS) + "\n", encoding="utf-8")
+        rlog(f"  → {len(SYNTHETIC_TFS)} TFs escritos")
+    else:
+        rlog(f"- Ya existe: {TF_PATH.name}")
+
+    # --- Archivos de referencia (descarga desde aertslab) ---
+    REMOTE_FILES = {
         "motifs.tbl": (
             "https://resources.aertslab.org/cistarget/motif2tf/"
             "motifs-v10nr_clust-nr.hgnc-m0.001-o0.0.tbl"
@@ -296,14 +326,14 @@ try:
         except Exception:
             return -1
 
-    for filename, url in URLS.items():
+    for filename, url in REMOTE_FILES.items():
         dest = DATA_DIR / filename
         expected = _remote_size(url)
 
         if dest.exists():
             local = dest.stat().st_size
             if expected > 0 and local != expected:
-                rlog(f"- {filename} corrupto/incompleto ({local} B vs {expected} B esperados), re-descargando...")
+                rlog(f"- {filename} corrupto/incompleto ({local} B vs {expected} B), re-descargando...")
                 dest.unlink()
             elif local == 0:
                 rlog(f"- {filename} está vacío, re-descargando...")
@@ -328,11 +358,6 @@ try:
         else:
             size_mb = dest.stat().st_size / (1024 * 1024)
             rlog(f"- Ya existe: {filename} ({size_mb:.2f} MB)")
-
-    LOOM_PATH    = DATA_DIR / "expr_mat_tiny.loom"
-    TF_PATH      = DATA_DIR / "test_TFs_tiny.txt"
-    MOTIFS_PATH  = DATA_DIR / "motifs.tbl"
-    RANKING_PATH = DATA_DIR / "hg38_10kbp_up_10kbp_down_full_tx_v10_clust.genes_vs_motifs.rankings.feather"
 
     step_end("PASO 0 — Descarga de datos de prueba")
 
