@@ -270,12 +270,12 @@ try:
 
     URLS = {
         "expr_mat_tiny.loom": (
-            "https://resources.aertslab.org/cistarget/tmp/pyscenic_tutorial/"
-            "expr_mat_tiny.loom"
+            "https://raw.githubusercontent.com/aertslab/SCENICprotocol/"
+            "master/example/expr_mat_tiny.loom"
         ),
         "test_TFs_tiny.txt": (
-            "https://resources.aertslab.org/cistarget/tmp/pyscenic_tutorial/"
-            "test_TFs_tiny.txt"
+            "https://raw.githubusercontent.com/aertslab/SCENICprotocol/"
+            "master/example/test_TFs_tiny.txt"
         ),
         "motifs.tbl": (
             "https://resources.aertslab.org/cistarget/motif2tf/"
