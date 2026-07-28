@@ -2,6 +2,25 @@
 runs/
 scenic_data/
 
+# Salidas de la version de escritorio (entrega/python).
+# Nada de esto se versiona: son varios GB y se regeneran corriendo el pipeline.
+#   datos/      las descargas (el archivo del estudio y las bases de SCENIC)
+#   resultados/ graficas, tablas y datos convertidos de cada corrida
+#   entorno/    el entorno de Python que arma instalar_dependencias.bat
+entrega/python/datos/
+entrega/python/resultados/
+entrega/python/entorno/
+
+# Archivos intermedios que deja la conversion desde R
+counts.mtx
+genes.csv
+barcodes.csv
+metadata.csv
+umap.csv
+convert_rds.R
+hacer_copia_pruebas.R
+*.RDS
+
 # AnnData and data files
 *.h5ad
 *.h5
@@ -17,6 +36,7 @@ __pycache__/
 .venv/
 venv/
 env/
+entorno/
 
 # IDE
 .vscode/

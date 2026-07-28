@@ -1,0 +1,180 @@
+============================================================
+Pipeline scanpy + SCENIC - version de escritorio
+============================================================
+
+Hace lo mismo que el cuaderno de Colab, pero corriendo en el equipo. Util si no
+se quiere depender de Colab, si el equipo tiene mas memoria, o si hay que dejar
+el analisis corriendo varias horas sin que se cierre la sesion.
+
+------------------------------------------------------------
+1. INSTALAR (una sola vez)
+------------------------------------------------------------
+
+Doble clic en:
+
+    instalar_dependencias.bat
+
+Prepara un entorno de Python aislado en la carpeta "entorno" e instala dentro
+todo lo necesario. No toca el Python del sistema ni ningun otro programa.
+
+Hace falta tener instalado:
+
+  - Python 3.11 o 3.12, desde https://www.python.org/downloads/
+    Al instalarlo hay que marcar la casilla "Add Python to PATH".
+
+  - R, solo para el modo "zenodo", desde
+    https://cran.r-project.org/bin/windows/base/
+    Los datos del estudio vienen en formato de Seurat, que es una herramienta
+    de R. Los paquetes de R que falten se instalan solos la primera vez.
+
+El instalador avisa si falta alguna de las dos cosas.
+
+------------------------------------------------------------
+2. EJECUTAR
+------------------------------------------------------------
+
+Doble clic en:
+
+    ejecutar.bat
+
+Tambien se puede lanzar desde la consola pasandole opciones:
+
+    ejecutar.bat --modo ejemplo
+    ejecutar.bat --n-cells-max 30000
+    ejecutar.bat --salida D:\resultados_lupus
+
+Para ver todas las opciones:
+
+    ejecutar.bat --help
+
+------------------------------------------------------------
+3. CONFIGURACION
+------------------------------------------------------------
+
+Todo lo configurable esta al principio de pipeline_scanpy_scenic.py, en el
+bloque PANEL DE CONTROL. Se puede editar ahi, o pasar las opciones por consola
+sin tocar el archivo.
+
+Lo que mas se suele cambiar:
+
+  MODO          "ejemplo" corre en minutos con datos publicos de prueba.
+                "zenodo"  descarga y analiza el estudio real.
+
+  N_CELLS_MAX   Cuantas celulas analizar. 0 = todas (169.513), lo que pide
+                bastante memoria: contando el margen que necesita R, conviene
+                tener 32 GB. Con un numero menor se toma una muestra que
+                respeta la proporcion de cada tipo celular.
+
+------------------------------------------------------------
+4. COMO SABER SI SIGUE TRABAJANDO O SE COLGO
+------------------------------------------------------------
+
+Cada 25 segundos aparece una linea asi:
+
+    [latido] 3m12s transcurridos | paso actual: Conversion en R (1m45s) |
+             suele tardar entre 10 y 20 minutos | CPU: 87%
+
+El dato que importa es el de CPU. Un paso que tarda pero esta trabajando
+consume CPU de verdad; un paso colgado se queda cerca de 0% indefinidamente. Si
+el CPU lleva mas de un minuto pegado a 0% en el mismo paso, el latido lo dice
+explicitamente ("podria estar colgado"): eso es lo que hay que mirar, no cuanto
+tiempo lleva corriendo.
+
+No hay una barra con porcentaje para todos los pasos: la conversion en R y
+buena parte de scanpy no exponen cuanto les falta, y fingir un porcentaje ahi
+seria inventarlo. Donde si existe un progreso real (el filtrado de SCENIC, la
+puntuacion por celula) se muestra una barra autentica, no decorativa.
+
+Los pasos que llaman a R muestran su salida linea por linea en cuanto R la
+escribe, no de golpe al final.
+
+------------------------------------------------------------
+5. QUE ESPERAR
+------------------------------------------------------------
+
+Modo ejemplo:
+  - Unos 15 minutos.
+  - No produce resultados reales: el conjunto de datos es demasiado pequeno
+    para que SCENIC valide nada. Sirve para comprobar que todo esta bien
+    instalado y ver el flujo completo.
+
+Modo zenodo:
+  - La primera vez descarga 1,6 GB del estudio y varios GB de bases de datos.
+    Esas descargas quedan guardadas y no se repiten.
+  - Con 60.000 celulas y esas descargas ya hechas, unos 25-30 minutos: la
+    mayor parte se va en la conversion del archivo en R. Depende del equipo.
+
+------------------------------------------------------------
+6. QUE ARCHIVOS SE GENERAN
+------------------------------------------------------------
+
+Todo queda en la carpeta "resultados":
+
+  graficas\                       las 12 graficas y las figuras del estudio
+  DE_completo_<modo>.csv          todos los genes evaluados por grupo celular
+  top100_DE_<modo>.csv            los mas caracteristicos de cada grupo
+  scenic_auc_<modo>.csv           actividad de los regulones en cada celula
+  datos_convertidos.h5ad          los datos ya convertidos y listos
+
+En la carpeta "datos" quedan las descargas, para no repetirlas entre corridas.
+Se puede borrar si hace falta espacio, a costa de volver a descargarlas.
+
+Si algun archivo lleva el sufijo _SIN_VALIDAR, no es un resultado de SCENIC:
+los regulones no pasaron el filtro y las cifras no son interpretables.
+
+Los nombres de las imagenes llevan el mismo numero que la grafica tiene en el
+cuaderno de Colab, para poder emparejarlas sin contar. Cuando una grafica
+produce dos imagenes se distinguen con letra:
+
+  01_violines_qc              Grafica 1
+  02_scatter_qc               Grafica 2
+  03_genes_variables          Grafica 3
+  04a_pca                     Grafica 4, componentes
+  04b_pca_varianza            Grafica 4, varianza explicada
+  05_grafo_vecinos            Grafica 5
+  06_umap_qc                  Grafica 6
+  07a_grupos                  Grafica 7, grupos numerados
+  07b_anotacion               Grafica 7, anotacion del archivo
+  08a_dotplot_marcadores      Grafica 8, dotplot
+  08b_marcadores_umap         Grafica 8, sobre el mapa
+  09_dotplot_diferenciales    Grafica 9
+  10_rankings_diferenciales   Grafica 10
+  11_heatmap_diferenciales    Grafica 11
+  12a_paga                    Grafica 12, conexiones entre grupos
+  12b_trayectoria             Grafica 12, pseudotiempo
+  fig1_subtipos_celulas_B     Figura 1 del estudio
+  fig2_volcano_pre_post       Figura 2 del estudio
+  scenic_regulones            actividad de los regulones
+
+Son 19 archivos porque cuatro de las doce graficas producen dos imagenes cada
+una. En el cuaderno esas dos aparecen juntas bajo la misma celda; en disco cada
+una es un archivo aparte.
+
+------------------------------------------------------------
+7. SI ALGO FALLA
+------------------------------------------------------------
+
+El analisis esta escrito para detenerse con un mensaje que explica la causa, en
+vez de seguir adelante en silencio. Conviene leer el error completo antes de
+reintentar: casi siempre dice que revisar o que opcion ajustar.
+
+Lo mas habitual:
+
+  "No se encontro R"        Instala R, o usa --modo ejemplo, que no lo necesita.
+
+  "No se pudieron           R no puede escribir sus paquetes donde lo intenta.
+  preparar los paquetes     El analisis usa la carpeta personal del usuario para
+  de R"                     evitarlo, pero si aun asi falla, abre R o RStudio una
+                            vez a mano y ejecuta:
+                                install.packages("SeuratObject")
+                            Acepta cuando pregunte si quieres usar una carpeta
+                            personal. Despues vuelve a lanzar el analisis.
+
+  El proceso se corta       Falta memoria. Baja N_CELLS_MAX.
+  durante la conversion
+
+  "No se pudo determinar    Los datos vienen en un estado que el analisis no
+  como viene la matriz"     reconoce. Se detiene a proposito para no producir
+                            resultados que parezcan validos sin serlo.
+
+============================================================
