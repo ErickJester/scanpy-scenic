@@ -51,7 +51,7 @@ SALTAR_GRAFICAS = False
 # celular, que conserva la proporcion de cada uno. El muestreo solo estratifica
 # por esa columna: los grupos que forma la figura 2, que cruza 9 pacientes con
 # varios momentos, quedan mas cortos cuanto mas se recorte.
-N_CELLS_MAX = 60000
+N_CELLS_MAX = 0        # 0 = las 169.513 completas
 
 # ---- Modo depuracion (solo MODO="zenodo") ------------------
 # Leer el archivo del estudio (1,6 GB) tarda varios minutos cada vez. En True se
