@@ -65,12 +65,16 @@ N_CELLS_DEBUG = 4000
 RDS_DEBUG_FILE = "RTX_zenodo_debug.RDS"
 
 # ---- SCENIC: tamano del analisis ---------------------------
-# El primer paso de SCENIC entrena un modelo por gen, y su costo crece rapido con
-# el numero de celulas. Con SCENIC_DOWNSAMPLE en True se recorta la entrada a
-# SCENIC_N_CELLS antes de empezar. El recorte solo afecta a SCENIC: las graficas
-# y las figuras del estudio se calculan sobre el conjunto completo.
-SCENIC_DOWNSAMPLE = True
-SCENIC_N_CELLS = 2000
+# SCENIC trabaja solo sobre las celulas B, y cuantas hay sale de N_CELLS_MAX:
+# con 60.000 son unas 5.968, y con el dataset completo unas 16.861.
+# Por defecto entran todas las que haya, de modo que este analisis crece cuando
+# se amplia N_CELLS_MAX en vez de quedarse fijo.
+# Poniendo SCENIC_DOWNSAMPLE en True se recortan a SCENIC_N_CELLS antes de
+# reconstruir la red, que es el paso cuyo costo crece mas rapido con el numero
+# de celulas. Sirve para pruebas rapidas, o si la corrida completa no cabe en el
+# tiempo disponible.
+SCENIC_DOWNSAMPLE = False    # True = recortar a SCENIC_N_CELLS
+SCENIC_N_CELLS = 2000        # solo se usa si SCENIC_DOWNSAMPLE = True
 SCENIC_N_GENES = 1500
 
 # Algoritmo con el que se reconstruye la red.
@@ -1943,9 +1947,12 @@ def preparar_matriz_scenic(adata, adata_B, cfg, carpeta, col_ctype):
         ad_s = adata_B.copy()
         if cfg.scenic_downsample and ad_s.n_obs > cfg.scenic_n_cells:
             sc.pp.subsample(ad_s, n_obs=cfg.scenic_n_cells, random_state=0)
-            print(f"Recorte a {ad_s.n_obs:,} celulas B")
+            print(f"Recorte a {ad_s.n_obs:,} celulas B (--scenic-downsample)")
         else:
-            print(f"Sin recorte: {ad_s.n_obs:,} celulas B (puede tardar horas)")
+            print(f"Todas las celulas B disponibles: {ad_s.n_obs:,}")
+            if ad_s.n_obs > 8000:
+                print("       Son bastantes: reconstruir la red puede tardar. Si hace")
+                print("       falta acortarlo, usa --scenic-downsample.")
 
         # El pool de genes se recorta contra la base de datos de SCENIC ANTES de
         # elegir los mas variables, no despues. El orden es lo que importa aqui.
@@ -2396,7 +2403,11 @@ class Config:
         self.rds_debug = RDS_DEBUG if args.rds_debug is None else args.rds_debug
         self.n_cells_debug = N_CELLS_DEBUG
         self.rds_debug_file = RDS_DEBUG_FILE
-        self.scenic_downsample = SCENIC_DOWNSAMPLE
+        # Pedir un tamano concreto implica querer el recorte, aunque no se haya
+        # pedido aparte: si no, --scenic-n-cells no tendria ningun efecto.
+        self.scenic_downsample = (SCENIC_DOWNSAMPLE
+                                  or bool(args.scenic_downsample)
+                                  or args.scenic_n_cells is not None)
         self.scenic_n_cells = args.scenic_n_cells or SCENIC_N_CELLS
         self.scenic_n_genes = SCENIC_N_GENES
         self.metodo_grn = args.metodo_grn or METODO_GRN
@@ -2427,6 +2438,7 @@ class Config:
         print(f"  Datos            : {self.modo}")
         print(f"  Metodo de red    : {self.metodo_grn}")
         print(f"  Celulas maximas  : {'todas' if self.n_cells_max == 0 else f'{self.n_cells_max:,}'}")
+        print(f"  Celulas a SCENIC : {f'{self.scenic_n_cells:,} (recortadas)' if self.scenic_downsample else 'todas las celulas B'}")
         print(f"  Graficas         : {'omitidas' if self.saltar_graficas else 'si'}")
         print(f"  Tipo celular     : {self.col_ctype}")
         print(f"  Resultados en    : {self.dir_salida}")
@@ -2454,8 +2466,11 @@ def leer_argumentos():
     p.add_argument("--col-ctype", dest="col_ctype", help="Columna con el tipo celular.")
     p.add_argument("--metodo-grn", dest="metodo_grn", choices=["grnboost2", "sklearn_aprox"],
                    help="Metodo para reconstruir la red.")
+    p.add_argument("--scenic-downsample", action="store_true", default=None,
+                   dest="scenic_downsample",
+                   help="Recorta las celulas que entran a SCENIC (por defecto entran todas).")
     p.add_argument("--scenic-n-cells", type=int, dest="scenic_n_cells",
-                   help="Celulas que entran a SCENIC.")
+                   help="Cuantas celulas dejar al recortar. Implica --scenic-downsample.")
     p.add_argument("--saltar-graficas", action="store_true", default=None,
                    dest="saltar_graficas", help="Omite las 12 graficas y va directo a SCENIC.")
     p.add_argument("--rds-debug", action="store_true", default=None, dest="rds_debug",

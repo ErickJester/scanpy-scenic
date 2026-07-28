@@ -65,6 +65,13 @@ Lo que mas se suele cambiar:
                 tener 32 GB. Con un numero menor se toma una muestra que
                 respeta la proporcion de cada tipo celular.
 
+  SCENIC_       Por defecto False: SCENIC usa todas las celulas B que salgan de
+  DOWNSAMPLE    N_CELLS_MAX (unas 5.968 con 60.000, unas 16.861 con todas), de
+                modo que ampliar N_CELLS_MAX tambien amplia este analisis.
+                Poniendolo en True se recorta a SCENIC_N_CELLS, lo que acorta
+                bastante el paso mas lento. Desde la consola es
+                --scenic-downsample, o directamente --scenic-n-cells 2000.
+
 ------------------------------------------------------------
 4. COMO SABER SI SIGUE TRABAJANDO O SE COLGO
 ------------------------------------------------------------
